@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use crate::ec::RangeEncoder;
+use crate::ec::SymbolWriter;
 use crate::shared::cdf::CdfContext;
 use crate::shared::ctx::{get_dc_sign_ctx, get_lo_ctx, get_skip_ctx};
 use crate::shared::itx::inv_txfm_add_dct;
@@ -195,8 +195,8 @@ pub struct CoefContext<'a> {
 
 /// Writes the block's coefficients the way `decode_coefs` reads them and
 /// returns the context value the decoder stores for its 4x4 units.
-pub fn write_coefs(
-    ec: &mut RangeEncoder,
+pub fn write_coefs<W: SymbolWriter>(
+    ec: &mut W,
     cdf: &mut CdfContext,
     levels: &Levels,
     c: &CoefContext,
@@ -376,7 +376,13 @@ pub fn write_coefs(
 }
 
 /// End-of-block position: its class, then the high bit, then the rest.
-fn write_eob(ec: &mut RangeEncoder, cdf: &mut CdfContext, eob: u32, tx2dszctx: usize, ctx: usize) {
+fn write_eob<W: SymbolWriter>(
+    ec: &mut W,
+    cdf: &mut CdfContext,
+    eob: u32,
+    tx2dszctx: usize,
+    ctx: usize,
+) {
     let class = if eob <= 1 {
         eob
     } else {
@@ -412,4 +418,14 @@ fn write_eob(ec: &mut RangeEncoder, cdf: &mut CdfContext, eob: u32, tx2dszctx: u
             ec.encode_bools_bypass(eob & ((1 << (class - 2)) - 1), class - 2);
         }
     }
+}
+
+/// Pixel-domain size of one quantizer step for transform `tx`, from the
+/// measured basis functions: what the rate-distortion trade-off is scaled by.
+pub fn quant_step_pixels(tx: usize, dq: u32) -> f64 {
+    let t_dim = &TXFM_DIMENSIONS[tx];
+    let b = basis(tx);
+    let mean_norm = b.norms.iter().map(|&n| n as f64).sum::<f64>() / b.norms.len() as f64;
+    let coef_step = dq as f64 / (1u32 << dq_shift(t_dim)) as f64;
+    mean_norm.sqrt() / AMPLITUDE as f64 * coef_step
 }

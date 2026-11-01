@@ -1,8 +1,9 @@
 //! rav2e — an AV2 video encoder in Rust.
 //!
 //! Early development. [`encode_still`] writes a legal AV2 still picture
-//! (8-bit 4:2:0, width and height multiples of 64) in which every 64x64
-//! block is a DC prediction plus a fully coded DCT residual.
+//! (8-bit 4:2:0, width and height multiples of 64) made of square blocks
+//! from 64x64 to 8x8, chosen by rate-distortion cost, each a DC prediction
+//! plus a fully coded DCT residual.
 //! The reconstruction it returns is exactly what an AV2 decoder outputs for
 //! the bitstream; the test suite checks that against rav2d and `avmdec`.
 //!

@@ -6,6 +6,9 @@
   tokens with their contexts, signs, Golomb remainders) with the decoder's
   dequantization and inverse transform. Luma PSNR on the test pictures rises
   from 17–18 dB to 25.8 dB.
+- M1b: square partitions from 64x64 down to 8x8 (the H-then-V binary splits
+  of AV2), chosen by rate-distortion cost; symbol costs come from a bit
+  counter that shares the syntax code with the range encoder.
 
 ## 0.1.0 — 2026-11-01
 

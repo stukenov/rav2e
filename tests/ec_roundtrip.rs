@@ -3,7 +3,7 @@
 
 mod support;
 
-use rav2e::ec::RangeEncoder;
+use rav2e::ec::{RangeEncoder, SymbolWriter};
 use rav2e::shared::cdf::CdfContext;
 use support::msac::{MsacContext, decode_exp_golomb, decode_hr};
 

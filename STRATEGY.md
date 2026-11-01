@@ -100,6 +100,9 @@ remaining intra modes chosen by RDO; M1d CDF adaptation and 10-bit.
 *M1a done (2026-11-01):* luma PSNR on the test pictures went from 17–18 dB
 (DC only) to 25.8 dB, the ceiling of a 64x64 transform, which AV2
 reconstructs at 32x32 and upsamples.
+*M1b done (2026-11-01):* square blocks from 64x64 to 8x8, chosen by
+rate-distortion cost with a bit counter over the same CDFs; on the test
+pictures luma PSNR at qidx 1 reaches 50 dB.
 
 
 All intra modes chosen by RDO, partition search, transform types and sizes,
