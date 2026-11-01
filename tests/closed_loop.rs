@@ -36,7 +36,13 @@ fn test_picture(width: usize, height: usize, seed: u32) -> Frame {
 }
 
 fn decode_with_rav2d(bitstream: &[u8]) -> Frame {
-    let mut dec = Decoder::open(&Settings::default()).expect("open rav2d");
+    // One thread: rav2d 0.4.0's two-pass multi-threaded decode corrupts output
+    // (fixed in 0.4.1), and Settings::default() turns it on on multi-core hosts.
+    let settings = Settings {
+        n_threads: 1,
+        ..Settings::default()
+    };
+    let mut dec = Decoder::open(&settings).expect("open rav2d");
     dec.send_data(Some(Data::wrap(bitstream.to_vec())))
         .expect("send data");
     let mut pictures = Vec::new();
