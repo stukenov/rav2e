@@ -2,16 +2,16 @@
 //!
 //! The encoder has to reconstruct exactly what a decoder will, so it uses the
 //! decoder's own tables and formulas. These are copied from
-//! [rav2d](https://github.com/stukenov/rav2d) at commit aab9d2d (same author,
-//! same BSD-2-Clause license), each file naming its source. Change them only
+//! [rav2d](https://github.com/stukenov/rav2d) (same author, same BSD-2-Clause
+//! license), each file naming its source file and commit. Change them only
 //! together with rav2d; the closed-loop test catches any drift.
 
 pub mod cdf;
 pub mod ctx;
+pub mod itx;
 pub mod msac_tables;
+pub mod scan;
 pub mod tables;
-
-use tables::{TX_SHIFT, TXFM_DIMENSIONS};
 
 /// Dequantizer for a quantizer index (`quantizer.rs::dq_lookup`).
 pub fn dq_lookup(qidx: i32) -> i32 {
@@ -46,27 +46,4 @@ pub fn predict_dc(dst: &mut [u8], size: usize, top: Option<&[u8]>, left: Option<
         (None, None) => 128,
     };
     dst[..size * size].fill(dc as u8);
-}
-
-/// Adds the inverse transform of a block whose only non-zero coefficient is
-/// `dc` (`inv_txfm_add` with `eob + txtp == 0`, the DCT_DCT DC-only path in
-/// `itx.rs`), clipping to 8 bits.
-pub fn add_dc_only_inverse(dst: &mut [u8], stride: usize, dc: i32, tx: usize) {
-    let t_dim = &TXFM_DIMENSIONS[tx];
-    let tx_sh = &TX_SHIFT[tx];
-    let (w, h) = (4 * t_dim.w as usize, 4 * t_dim.h as usize);
-    let is_rect2 = ((t_dim.lw + t_dim.lh) & 1) != 0;
-    let shift_p1 = tx_sh[0] as i32;
-    let shift = shift_p1 + tx_sh[1] as i32 - 12;
-    let rnd = (1 << (shift - 1)) + shift_p1 - 6;
-    let mut dc = dc;
-    if is_rect2 {
-        dc = (dc * 181 + 128) >> 8;
-    }
-    dc = (dc + rnd) >> shift;
-    for y in 0..h {
-        for p in &mut dst[y * stride..y * stride + w] {
-            *p = (*p as i32 + dc).clamp(0, 255) as u8;
-        }
-    }
 }

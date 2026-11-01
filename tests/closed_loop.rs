@@ -156,12 +156,12 @@ fn rav2d_decodes_the_encoder_reconstruction() {
             "{w}x{h} qidx {qidx}: {} bytes, luma PSNR {got:.2} dB (block means: {ideal:.2} dB)",
             enc.bitstream.len()
         );
-        // At fine quantizers one DC per 64x64 block should come close to the
-        // best a flat block can do: the mean of the source.
+        // At fine quantizers the AC coefficients must carry real detail: well
+        // above what the block means alone give.
         if qidx <= 60 {
             assert!(
-                got >= ideal - 0.5,
-                "{w}x{h} q{qidx}: {got:.2} dB, block means give {ideal:.2} dB"
+                got >= ideal + 5.0,
+                "{w}x{h} q{qidx}: {got:.2} dB, block means alone give {ideal:.2} dB"
             );
         }
     }

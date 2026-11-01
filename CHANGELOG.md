@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- M1a: full DCT_DCT coefficient coding (end of block, base and high-range
+  tokens with their contexts, signs, Golomb remainders) with the decoder's
+  dequantization and inverse transform. Luma PSNR on the test pictures rises
+  from 17–18 dB to 25.8 dB.
+
 ## 0.1.0 — 2026-11-01
 
 Milestone M0: the worst legal AV2 encoder.

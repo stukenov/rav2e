@@ -1,5 +1,6 @@
-//! Coefficient contexts, copied from rav2d (`crates/rav2d/src/recon.rs` at
-//! aab9d2d). The encoder derives the same contexts the decoder will.
+//! Coefficient contexts, copied from rav2d (`crates/rav2d/src/recon.rs`;
+//! `get_skip_ctx` and `get_dc_sign_ctx` at aab9d2d, `get_lo_ctx` at 4440fd2).
+//! The encoder derives the same contexts the decoder will.
 
 use super::tables::{BLOCK_DIMENSIONS, N_BS_SIZES, TxfmInfo};
 
@@ -111,4 +112,98 @@ pub fn get_dc_sign_ctx(t_dim: &TxfmInfo, a: &[u8], l: &[u8]) -> u32 {
     t = t.wrapping_mul(mul);
     let s = (t >> 56) as i32 - t_dim.w as i32 - t_dim.h as i32;
     (s != 0) as u32 + (s > 0) as u32
+}
+
+pub fn get_lo_ctx(
+    levels: &[i8],
+    off: usize,
+    tx_class: u8,
+    hi_mag: &mut u32,
+    xy: u32,
+    plane: i32,
+    stride: usize,
+) -> u32 {
+    let chroma = plane != 0;
+    let lo_freq = xy
+        < if chroma {
+            1
+        } else if tx_class == 0 {
+            4
+        } else {
+            2
+        };
+    let mut lim: u32 = if lo_freq { 5 } else { 3 };
+    let mut lo_mag: u32 = 0;
+    let mut hi: u32 = 0;
+
+    macro_rules! add {
+        ($v:expr) => {{
+            let val = $v as u32;
+            lo_mag += val.min(lim);
+            hi += val.min(5);
+        }};
+    }
+
+    add!(levels[off + 1]);
+    add!(levels[off + stride]);
+
+    let offset: u32;
+    if tx_class == 0 {
+        add!(levels[off + stride + 1]);
+        if !chroma {
+            lo_mag +=
+                (levels[off + 2] as u32).min(lim) + (levels[off + 2 * stride] as u32).min(lim);
+            if lo_freq {
+                offset = if xy == 0 {
+                    0
+                } else if xy < 2 {
+                    9
+                } else {
+                    16
+                };
+                lim = if xy == 0 {
+                    8
+                } else if xy < 2 {
+                    6
+                } else {
+                    4
+                };
+            } else {
+                offset = if xy < 6 {
+                    0
+                } else if xy < 8 {
+                    5
+                } else {
+                    10
+                };
+                lim = 4;
+            }
+        } else {
+            lim = 3;
+            offset = if plane == 1 { 0 } else { 4 };
+        }
+    } else {
+        if !chroma {
+            lim = 3;
+            add!(levels[off + 2]);
+            lo_mag += (levels[off + 3] as u32).min(3) + (levels[off + 4] as u32).min(3);
+            if lo_freq {
+                offset = if xy == 0 { 21 } else { 28 };
+                lim = if xy == 0 { 6 } else { 4 };
+            } else {
+                offset = 15;
+                lim = 4;
+            }
+        } else {
+            offset = 8;
+            lim = 3;
+        }
+    }
+
+    *hi_mag = (if !chroma && lo_freq && (xy > 0 || tx_class != 0) {
+        7
+    } else {
+        0
+    }) + ((hi + 1) >> 1).min(if chroma { 3 } else { 6 });
+    offset + ((lo_mag + 1) >> 1).min(lim)
 }

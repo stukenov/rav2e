@@ -10,12 +10,10 @@
 counterpart of [rav2d](https://github.com/stukenov/rav2d), the Rust AV2
 decoder.
 
-> **Status: early.** Milestone M0 is done: rav2e writes a legal AV2 still
-> picture, and nothing more. Every 64x64 block is one flat DC prediction
-> plus one DC coefficient, so the picture is a mosaic of block averages.
-> It is the worst legal encoder on purpose: the next milestones build
-> quality on top of a stream that is already proven correct. See
-> [STRATEGY.md](STRATEGY.md).
+> **Status: early.** rav2e writes a legal AV2 still picture. Every 64x64
+> block is a DC prediction plus a fully coded DCT residual (milestone M1a);
+> smaller blocks and the other intra modes come next. Each step builds on a
+> stream that is already proven correct. See [STRATEGY.md](STRATEGY.md).
 
 ## What works today
 
@@ -23,12 +21,12 @@ decoder.
 |---|---|
 | Input | 8-bit 4:2:0 y4m, first frame; width and height multiples of 64 |
 | Output | AV2 low-overhead OBU stream: temporal delimiter, sequence header, one key frame |
-| Coding | 64x64 blocks, DC_PRED, DC-only transform coefficients, one tile |
+| Coding | 64x64 blocks, DC_PRED, DCT_DCT residual with all coefficients, one tile |
 | Quantizer | `qidx` 1–255 |
 | Verified with | rav2d and `avmdec` (the AOM reference decoder), byte for byte |
 
-Not yet: other intra modes, partitioning, AC coefficients, rate-distortion
-optimisation, inter frames, in-loop filters, 10-bit, rate control.
+Not yet: partitioning below 64x64, other intra modes and transform types,
+rate-distortion optimisation, inter frames, in-loop filters, 10-bit, rate control.
 
 ## Quick start
 
@@ -91,7 +89,8 @@ as short notes in [`zettel/`](zettel/).
 
 | Path | |
 |---|---|
-| `src/encoder.rs` | M0 encoder: block loop, level search, coefficient writing |
+| `src/encoder.rs` | block loop: prediction, residual, reconstruction |
+| `src/coef.rs` | forward transform, quantization, coefficient syntax |
 | `src/ec.rs` | range encoder, the mirror of rav2d's symbol decoder |
 | `src/headers.rs`, `src/bitwriter.rs` | OBU, sequence and frame headers |
 | `src/frame.rs` | frames and y4m input/output |

@@ -6,10 +6,9 @@
 //! largest transform (64x64 luma, 32x32 chroma). The picture the encoder
 //! reconstructs must equal what any AV2 decoder makes of the stream.
 
+use crate::coef::{CoefContext, NO_COEF_CTX, Quant, quantize, reconstruct, write_coefs};
 use crate::shared::cdf::{CdfContext, cdf_thread_init_static_qcat};
-use crate::shared::ctx::{get_dc_sign_ctx, get_skip_ctx};
-use crate::shared::tables::{TXFM_DIMENSIONS, TxfmInfo};
-use crate::shared::{add_dc_only_inverse, dq_lookup};
+use crate::shared::dq_lookup;
 
 use crate::ec::RangeEncoder;
 use crate::frame::Frame;
@@ -24,8 +23,6 @@ const LUMA_TX: usize = 4;
 const CHROMA_TX: usize = 3;
 /// `PARTITION_SUBB[Bs64x64].ctx[0]` in rav2d's `decode.rs`.
 const PARTITION_CTX_OFFSET_64X64: usize = 3;
-/// Context value of a 4x4 unit with no coded coefficients.
-const NO_COEF_CTX: u8 = 0x40;
 /// What `decode_sb` leaves in the partition context after a NONE block of
 /// 64x64: `!(bw4 - 1)` with bw4 = 16.
 const PARTITION_CTX_64X64: u8 = !(16u8 - 1);
@@ -158,7 +155,7 @@ pub fn encode_still(src: &Frame, qidx: u8) -> Result<Encoded, EncodeError> {
                 have_left,
                 dq_dc,
             };
-            let (res_ctx, _) = code_dc_block(
+            let (res_ctx, _) = code_block(
                 &mut ec,
                 &mut cdf,
                 &luma,
@@ -187,7 +184,7 @@ pub fn encode_still(src: &Frame, qidx: u8) -> Result<Encoded, EncodeError> {
                     dq_dc,
                 };
                 let cbx4 = bx4 / 2;
-                let (res_ctx, coded) = code_dc_block(
+                let (res_ctx, coded) = code_block(
                     &mut ec,
                     &mut cdf,
                     &blk,
@@ -217,11 +214,15 @@ pub fn encode_still(src: &Frame, qidx: u8) -> Result<Encoded, EncodeError> {
     Ok(Encoded { bitstream, recon })
 }
 
-/// Predicts the block with DC_PRED from the reconstruction so far, picks the
-/// DC level that brings the block closest to the source, writes it, and
-/// stores the reconstruction. Returns the coefficient context the decoder
+/// Quantizer rounding offset: below one half, so that coefficients just
+/// above a quantizer step are dropped rather than paid for.
+const ROUNDING: f32 = 0.36;
+
+/// Predicts the block with DC_PRED from the reconstruction so far,
+/// transforms and quantizes the residual, writes the coefficients, and stores
+/// the decoder's reconstruction. Returns the coefficient context the decoder
 /// keeps for the block's 4x4 units and whether any coefficient was coded.
-fn code_dc_block(
+fn code_block(
     ec: &mut RangeEncoder,
     cdf: &mut CdfContext,
     b: &TxBlock,
@@ -230,117 +231,32 @@ fn code_dc_block(
     left: &[u8],
     u_has_cf: i32,
 ) -> (u8, bool) {
-    let t_dim = &TXFM_DIMENSIONS[b.tx];
-    let pred = predict_dc(recon, b);
-
-    // Level search. The reconstruction's sum grows monotonically with the
-    // level, so binary-search the first level whose block is not darker than
-    // the source, then let the error decide between it and its neighbour.
-    // (Probing with level 1 does not work: at fine quantizers one step of DC
-    // rounds to nothing.)
-    const MAX_LEVEL: i32 = 1 << 14;
-    let src_sum: i64 = (0..b.size)
-        .flat_map(|y| (0..b.size).map(move |x| (y, x)))
-        .map(|(y, x)| b.src[(b.y + y) * b.stride + b.x + x] as i64)
-        .sum();
-    let excess = |level: i32| -> i64 {
-        reconstruct(&pred, b, t_dim, level)
-            .iter()
-            .map(|&v| v as i64)
-            .sum::<i64>()
-            - src_sum
+    let mut out = predict_dc(recon, b);
+    let residual: Vec<i32> = (0..b.size * b.size)
+        .map(|k| {
+            let (y, x) = (k / b.size, k % b.size);
+            b.src[(b.y + y) * b.stride + b.x + x] as i32 - out[k] as i32
+        })
+        .collect();
+    let quant = Quant {
+        dq_dc: b.dq_dc,
+        dq_ac: b.dq_dc,
     };
-    let (mut lo, mut hi) = (-MAX_LEVEL, MAX_LEVEL);
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if excess(mid) >= 0 {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-    let mut best = (u64::MAX, 0i32);
-    for level in [0, lo - 1, lo] {
-        let level = level.clamp(-MAX_LEVEL, MAX_LEVEL);
-        let sse = sse(&reconstruct(&pred, b, t_dim, level), b);
-        if sse < best.0 || (sse == best.0 && level.abs() < best.1.abs()) {
-            best = (sse, level);
-        }
-    }
-    let level = best.1;
-
-    write_dc_coef(ec, cdf, b, t_dim, above, left, u_has_cf, level);
-
-    let out = reconstruct(&pred, b, t_dim, level);
+    let levels = quantize(&residual, b.tx, b.plane != 0, quant, ROUNDING);
+    let ctx = CoefContext {
+        plane: b.plane,
+        bs: BS_64X64,
+        above,
+        left,
+        u_has_cf,
+    };
+    let res_ctx = write_coefs(ec, cdf, &levels, &ctx);
+    reconstruct(&levels, quant, &mut out, b.size);
     for y in 0..b.size {
         let row = (b.y + y) * b.stride + b.x;
         recon[row..row + b.size].copy_from_slice(&out[y * b.size..(y + 1) * b.size]);
     }
-
-    if level == 0 {
-        return (NO_COEF_CTX, false);
-    }
-    let tok = level.unsigned_abs();
-    let sign_bits = if level < 0 { 0 } else { 0x80 };
-    ((tok.min(63) as u8) | sign_bits, true)
-}
-
-/// `decode_coefs` for a block whose only coefficient is DC: the skip flag, an
-/// end-of-block at position 0, the DC token, its sign and remainder.
-#[allow(clippy::too_many_arguments)]
-fn write_dc_coef(
-    ec: &mut RangeEncoder,
-    cdf: &mut CdfContext,
-    b: &TxBlock,
-    t_dim: &TxfmInfo,
-    above: &[u8],
-    left: &[u8],
-    u_has_cf: i32,
-    level: i32,
-) {
-    let chroma = b.plane != 0;
-    let bs = BS_64X64;
-    let sctx = get_skip_ctx(t_dim, bs, above, left, b.plane as i32, u_has_cf, true, true) as usize;
-    let all_skip = level == 0;
-    match b.plane {
-        2 => ec.encode_bool_adapt(all_skip, cdf.coef.skip_v(sctx)),
-        _ => ec.encode_bool_adapt(all_skip, cdf.coef.skip(0, t_dim.ctx as usize, sctx)),
-    }
-    if all_skip {
-        return;
-    }
-
-    // End of block at scan position 0 (only DC is non-zero). The largest
-    // transforms code their eob with the 1024-entry class.
-    let tx2dszctx = t_dim.lw.min(3) as usize + t_dim.lh.min(3) as usize;
-    assert_eq!(tx2dszctx, 6, "M0 codes DC-only 32x32 and 64x64 transforms");
-    let eob_ctx = if chroma { 2 } else { 0 };
-    ec.encode_symbol_adapt(0, cdf.coef.eob_bin_1024(eob_ctx), 7);
-
-    let tok = level.unsigned_abs();
-    let negative = level < 0;
-    if chroma {
-        ec.encode_symbol_adapt(tok.min(5) - 1, cdf.coef.eob_base_uv_tok_lf(0), 4);
-        ec.encode_bool_bypass(negative);
-        if tok >= 5 {
-            ec.encode_hr(tok - 5, 0);
-        }
-    } else {
-        ec.encode_symbol_adapt(
-            tok.min(5) - 1,
-            cdf.coef.eob_base_y_tok_lf(t_dim.ctx as usize, 0),
-            4,
-        );
-        if tok >= 5 {
-            // hi_idx 0: the 2-D transform class.
-            ec.encode_symbol_adapt((tok - 5).min(3), cdf.coef.br_y_tok_lf(0), 3);
-        }
-        let dc_sign_ctx = get_dc_sign_ctx(t_dim, above, left) as usize;
-        ec.encode_bool_adapt(negative, cdf.coef.dc_sign(0, 0, dc_sign_ctx));
-        if tok >= 8 {
-            ec.encode_hr(tok - 8, 0);
-        }
-    }
+    (res_ctx, levels.eob >= 0)
 }
 
 /// DC_PRED from the reconstructed neighbours, choosing the variant the
@@ -359,41 +275,4 @@ fn predict_dc(recon: &[u8], b: &TxBlock) -> Vec<u8> {
     let mut dst = vec![0u8; size * size];
     crate::shared::predict_dc(&mut dst, size, top.as_deref(), left.as_deref());
     dst
-}
-
-/// The decoder's dequantized DC coefficient for a signed level.
-fn dc_coefficient(b: &TxBlock, t_dim: &TxfmInfo, level: i32) -> i32 {
-    let tok = level.unsigned_abs();
-    let negative = level < 0;
-    let max_br = if b.plane != 0 { 5 } else { 8 };
-    let shift = 3 + (t_dim.ctx as i32 - 2).max(0);
-    // cf_max for 8-bit: !((!127) << 8)
-    let cf_max = !((!127u32) << 8) as i32;
-    let val = if tok >= max_br {
-        let v = tok & 0xfffff;
-        let raw = (((v.wrapping_mul(b.dq_dc)) & 0xffffff).wrapping_add(4) >> shift) as i32;
-        raw.min(cf_max + negative as i32)
-    } else {
-        (tok.wrapping_mul(b.dq_dc).wrapping_add(4) >> shift) as i32
-    };
-    if negative { -val } else { val }
-}
-
-fn reconstruct(pred: &[u8], b: &TxBlock, t_dim: &TxfmInfo, level: i32) -> Vec<u8> {
-    let mut out = pred.to_vec();
-    if level != 0 {
-        add_dc_only_inverse(&mut out, b.size, dc_coefficient(b, t_dim, level), b.tx);
-    }
-    out
-}
-
-fn sse(block: &[u8], b: &TxBlock) -> u64 {
-    let mut s = 0u64;
-    for y in 0..b.size {
-        for x in 0..b.size {
-            let d = block[y * b.size + x] as i64 - b.src[(b.y + y) * b.stride + b.x + x] as i64;
-            s += (d * d) as u64;
-        }
-    }
-    s
 }

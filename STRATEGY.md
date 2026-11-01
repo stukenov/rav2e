@@ -93,7 +93,15 @@ both decode each to the encoder's reconstruction byte for byte. The range
 coder round-trips 64,000 random symbols against rav2d's `MsacContext`, with
 adaptation on and off.
 
-**M1 — intra.**
+**M1 — intra.** Worked in steps, each behind the same closed-loop gate:
+M1a full coefficients (forward transform, quantization, the whole
+DCT_DCT coefficient syntax); M1b partitioning below 64x64; M1c the
+remaining intra modes chosen by RDO; M1d CDF adaptation and 10-bit.
+*M1a done (2026-11-01):* luma PSNR on the test pictures went from 17–18 dB
+(DC only) to 25.8 dB, the ceiling of a 64x64 transform, which AV2
+reconstructs at 32x32 and upsamples.
+
+
 All intra modes chosen by RDO, partition search, transform types and sizes,
 lambda from the quantizer, parity hiding, 10-bit. The BD-rate harness
 exists.
