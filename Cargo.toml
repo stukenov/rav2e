@@ -1,19 +1,23 @@
 [package]
 name = "rav2e"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "BSD-2-Clause"
 repository = "https://github.com/stukenov/rav2e"
-description = "AV2 video encoder in Rust (pre-alpha)"
+description = "AV2 video encoder in Rust (early: legal still pictures, DC-only)"
+documentation = "https://docs.rs/rav2e"
+homepage = "https://github.com/stukenov/rav2e"
 keywords = ["av2", "video", "encoder", "codec"]
 categories = ["multimedia::video", "multimedia::encoding"]
 readme = "README.md"
+exclude = [".github/"]
 
 [dependencies]
-# The decoder's reconstruction, CDF tables and context helpers. The feature is
-# unstable and only on the encoder-internals branch for now.
-rav2d = { git = "https://github.com/stukenov/rav2d", branch = "encoder-internals", features = ["encoder-internals"] }
+
+[dev-dependencies]
+# The test oracle: the Rust AV2 decoder decodes every stream rav2e writes.
+rav2d = "0.4.0"
 
 [profile.dev]
 debug = false

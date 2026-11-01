@@ -6,20 +6,24 @@
 //! largest transform (64x64 luma, 32x32 chroma). The picture the encoder
 //! reconstructs must equal what any AV2 decoder makes of the stream.
 
-use rav2d::cdf::{CdfContext, cdf_thread_init_static_qcat};
-use rav2d::decode::PARTITION_SUBB;
-use rav2d::ipred::{ipred_dc_8bpc, ipred_dc_128_8bpc, ipred_dc_left_8bpc, ipred_dc_top_8bpc};
-use rav2d::itx::inv_txfm_add_8bpc;
-use rav2d::levels::BlockSize;
-use rav2d::quantizer::dq_lookup;
-use rav2d::recon::{get_dc_sign_ctx, get_skip_ctx};
-use rav2d::tables::{MAX_TXFM_SIZE_FOR_BS, TX_PART_TBL, TXFM_DIMENSIONS, TxfmInfo};
+use crate::shared::cdf::{CdfContext, cdf_thread_init_static_qcat};
+use crate::shared::ctx::{get_dc_sign_ctx, get_skip_ctx};
+use crate::shared::tables::{TXFM_DIMENSIONS, TxfmInfo};
+use crate::shared::{add_dc_only_inverse, dq_lookup};
 
 use crate::ec::RangeEncoder;
 use crate::frame::Frame;
 use crate::headers::{StillParams, still_picture_stream};
 
 const SB: usize = 64;
+/// rav2d `BlockSize::Bs64x64`.
+const BS_64X64: usize = 6;
+/// Largest transforms of a 64x64 block: luma TX_64X64 (`TX_PART_TBL[bs][0]`),
+/// 4:2:0 chroma TX_32X32 (`MAX_TXFM_SIZE_FOR_BS[bs][I444 - I420]`).
+const LUMA_TX: usize = 4;
+const CHROMA_TX: usize = 3;
+/// `PARTITION_SUBB[Bs64x64].ctx[0]` in rav2d's `decode.rs`.
+const PARTITION_CTX_OFFSET_64X64: usize = 3;
 /// Context value of a 4x4 unit with no coded coefficients.
 const NO_COEF_CTX: u8 = 0x40;
 /// What `decode_sb` leaves in the partition context after a NONE block of
@@ -111,14 +115,11 @@ pub fn encode_still(src: &Frame, qidx: u8) -> Result<Encoded, EncodeError> {
         return Err(EncodeError::UnsupportedQidx(qidx));
     }
 
-    let bs = BlockSize::Bs64x64 as usize;
-    let luma_tx = TX_PART_TBL[bs][0] as usize;
-    // dav2d_max_txfm_size_for_bs[bs][I444 - I420]
-    let chroma_tx = MAX_TXFM_SIZE_FOR_BS[bs][2] as usize;
+    let (luma_tx, chroma_tx) = (LUMA_TX, CHROMA_TX);
     let dq_dc = dq_lookup(qidx as i32) as u32;
 
     let qcat = cdf_thread_init_static_qcat(qidx as u32) as usize;
-    let mut cdf = CdfContext::init_from_defaults(qcat);
+    let mut cdf = CdfContext::init_from_defaults(qcat, false);
     let mut ec = RangeEncoder::new(true);
     let mut ctx = Contexts::new(width);
     let mut recon = Frame::new(width, height);
@@ -131,7 +132,7 @@ pub fn encode_still(src: &Frame, qidx: u8) -> Result<Encoded, EncodeError> {
             // Partition: one NONE block for the whole superblock.
             let ctx1 = ((ctx.above_partition[bx4] >> 3) & 1) as usize
                 + ((ctx.left_partition[by4] >> 3) & 1) as usize * 2;
-            let ctx2 = ctx1 + PARTITION_SUBB[bs].ctx[0] as usize * 4;
+            let ctx2 = ctx1 + PARTITION_CTX_OFFSET_64X64 * 4;
             ec.encode_bool_adapt(false, cdf.m.part_split(0, ctx2));
 
             // Luma mode DC_PRED: first set, first index. With DC everywhere the
@@ -298,7 +299,7 @@ fn write_dc_coef(
     level: i32,
 ) {
     let chroma = b.plane != 0;
-    let bs = BlockSize::Bs64x64 as usize;
+    let bs = BS_64X64;
     let sctx = get_skip_ctx(t_dim, bs, above, left, b.plane as i32, u_has_cf, true, true) as usize;
     let all_skip = level == 0;
     match b.plane {
@@ -346,24 +347,17 @@ fn write_dc_coef(
 /// decoder picks for the available edges.
 fn predict_dc(recon: &[u8], b: &TxBlock) -> Vec<u8> {
     let size = b.size;
-    let mut dst = vec![0u8; size * size];
-    let o = size;
-    let mut edge = vec![0u8; 2 * size + 1];
-    if b.have_top {
+    let top: Option<Vec<u8>> = b.have_top.then(|| {
         let row = (b.y - 1) * b.stride + b.x;
-        edge[o + 1..o + 1 + size].copy_from_slice(&recon[row..row + size]);
-    }
-    if b.have_left {
-        for i in 0..size {
-            edge[o - 1 - i] = recon[(b.y + i) * b.stride + b.x - 1];
-        }
-    }
-    match (b.have_left, b.have_top) {
-        (true, true) => ipred_dc_8bpc(&mut dst, size, &edge, o, size, size, 0),
-        (false, true) => ipred_dc_top_8bpc(&mut dst, size, &edge, o, size, size, 0),
-        (true, false) => ipred_dc_left_8bpc(&mut dst, size, &edge, o, size, size, 0),
-        (false, false) => ipred_dc_128_8bpc(&mut dst, size, size, size),
-    }
+        recon[row..row + size].to_vec()
+    });
+    let left: Option<Vec<u8>> = b.have_left.then(|| {
+        (0..size)
+            .map(|i| recon[(b.y + i) * b.stride + b.x - 1])
+            .collect()
+    });
+    let mut dst = vec![0u8; size * size];
+    crate::shared::predict_dc(&mut dst, size, top.as_deref(), left.as_deref());
     dst
 }
 
@@ -388,10 +382,7 @@ fn dc_coefficient(b: &TxBlock, t_dim: &TxfmInfo, level: i32) -> i32 {
 fn reconstruct(pred: &[u8], b: &TxBlock, t_dim: &TxfmInfo, level: i32) -> Vec<u8> {
     let mut out = pred.to_vec();
     if level != 0 {
-        let mut coeff = vec![0i32; (t_dim.w as usize * 4) * (t_dim.h as usize * 4)];
-        coeff[0] = dc_coefficient(b, t_dim, level);
-        // txtp DCT_DCT (0) with eob 0 takes the decoder's DC-only path.
-        inv_txfm_add_8bpc(&mut out, 0, b.size, &mut coeff, 0, 0, b.tx);
+        add_dc_only_inverse(&mut out, b.size, dc_coefficient(b, t_dim, level), b.tx);
     }
     out
 }

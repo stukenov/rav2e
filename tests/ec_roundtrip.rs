@@ -1,10 +1,11 @@
-//! Whatever the range encoder writes, rav2d's decoder must read back as the
-//! same symbols, with CDF adaptation on and off.
+//! Whatever the range encoder writes, rav2d's symbol decoder must read back
+//! as the same symbols, with CDF adaptation on and off.
 
-use rav2d::cdf::CdfContext;
-use rav2d::msac::MsacContext;
-use rav2d::recon::{decode_exp_golomb, decode_hr};
+mod support;
+
 use rav2e::ec::RangeEncoder;
+use rav2e::shared::cdf::CdfContext;
+use support::msac::{MsacContext, decode_exp_golomb, decode_hr};
 
 /// xorshift64*: deterministic, no dependency.
 struct Rng(u64);
@@ -64,7 +65,7 @@ fn roundtrip(seed: u64, disable_cdf_update: bool) {
     let mut rng = Rng(seed);
     let ops = random_ops(&mut rng, 4000);
 
-    let mut enc_cdf = CdfContext::init_from_defaults(1);
+    let mut enc_cdf = CdfContext::init_from_defaults(1, false);
     let mut enc = RangeEncoder::new(disable_cdf_update);
     for &op in &ops {
         match op {
@@ -80,7 +81,7 @@ fn roundtrip(seed: u64, disable_cdf_update: bool) {
     }
     let bytes = enc.finish();
 
-    let mut dec_cdf = CdfContext::init_from_defaults(1);
+    let mut dec_cdf = CdfContext::init_from_defaults(1, false);
     let mut dec = MsacContext::new(&bytes, disable_cdf_update);
     for (i, &op) in ops.iter().enumerate() {
         let ok = match op {

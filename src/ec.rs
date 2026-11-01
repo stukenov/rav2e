@@ -6,7 +6,7 @@
 //! so whatever is written here is read back as the same symbol. CDF
 //! adaptation is the decoder's, step for step.
 
-use rav2d::msac::{MSAC_MIN_PROB, MSAC_RATE};
+use crate::shared::msac_tables::{MSAC_MIN_PROB, MSAC_RATE};
 
 pub struct RangeEncoder {
     /// 16-bit digits before carry propagation (AVM `precarry_buf`).

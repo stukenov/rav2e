@@ -39,7 +39,7 @@ The lessons:
 
 | rav1e | rav2e |
 |---|---|
-| libaom C via FFI as scaffolding | rav2d's Rust reconstruction: intra and inter prediction, inverse transforms, in-loop filters, CDF and quantizer tables, MV prediction — already bit-exact against dav2d and avmdec |
+| libaom C via FFI as scaffolding | rav2d's Rust reconstruction, copied into `src/shared/` as it is needed: intra and inter prediction, inverse transforms, in-loop filters, CDF and quantizer tables, MV prediction — already bit-exact against dav2d and avmdec |
 | `aomdec` decodes every output | `avmdec` and rav2d decode every output |
 | AWCY | a local BD-rate harness: rav2e vs `avmenc` (and vs rav1e for AV1 context) on a fixed clip set |
 | dav1d asm | rav2d's vendored NEON (MC, intra) |
@@ -120,16 +120,16 @@ fuzzing of the API and the y4m reader, release cadence.
 Forward-side SIMD (SAD, SATD, forward transforms) of our own; reuse
 rav2d's NEON for reconstruction; x86.
 
-## Decisions to take at M0
+## Decisions taken at M0
 
-- **How rav2e reaches rav2d's internals.** All rav2d modules are
-  `pub(crate)` today. Recommended: a feature in rav2d (say
-  `encoder-internals`) that makes the needed modules public, with rav2e
-  depending on it by git or path; split out a shared crate only when the
-  interface settles. The alternative, a separate `rav2-common` crate now, is
-  cleaner but costs a refactor of rav2d before any encoder code exists.
+- **How rav2e reaches rav2d's internals.** By copying them. rav2d keeps its
+  modules crate-private; the tables and formulas rav2e needs live in
+  `src/shared/`, each file naming its rav2d source and commit. rav2d is a
+  dev-dependency only, through its public `Decoder`, as the test oracle. A
+  feature in rav2d that exposed its modules was tried and dropped (see
+  `zettel/shared-code-is-copied-from-rav2d.md`).
 - **Where `avmdec` comes from in CI.** Built from the AVM repository at a
-  pinned commit and cached, as rav2d does with the vector generator.
+  pinned commit and cached.
 
 ## Not goals
 

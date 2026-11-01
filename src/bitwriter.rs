@@ -1,4 +1,5 @@
-//! MSB-first bit writer for OBU headers: the mirror of rav2d's `GetBits`.
+//! MSB-first bit writer for OBU headers: the mirror of rav2d's `GetBits`
+//! reader.
 
 #[derive(Default)]
 pub struct BitWriter {
@@ -93,7 +94,53 @@ pub fn put_uleb128(out: &mut Vec<u8>, mut v: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rav2d::getbits::GetBits;
+
+    /// The subset of rav2d's `GetBits` the headers use, written the same way.
+    struct GetBits<'a> {
+        data: &'a [u8],
+        pos: usize,
+    }
+
+    impl<'a> GetBits<'a> {
+        fn new(data: &'a [u8]) -> Self {
+            Self { data, pos: 0 }
+        }
+
+        fn get_bit(&mut self) -> u32 {
+            let b = self.data[self.pos / 8] >> (7 - self.pos % 8) & 1;
+            self.pos += 1;
+            b as u32
+        }
+
+        fn get_bits(&mut self, n: u32) -> u32 {
+            (0..n).fold(0, |v, _| (v << 1) | self.get_bit())
+        }
+
+        fn get_vlc(&mut self) -> u32 {
+            if self.get_bit() != 0 {
+                return 0;
+            }
+            let mut n_bits = 1;
+            while self.get_bit() == 0 {
+                n_bits += 1;
+            }
+            ((1u32 << n_bits) - 1) + self.get_bits(n_bits)
+        }
+
+        fn get_uniform(&mut self, max: u32) -> u32 {
+            if max <= 1 {
+                return 0;
+            }
+            let l = 32 - max.leading_zeros();
+            let m = (1 << l) - max;
+            let v = self.get_bits(l - 1);
+            if v < m {
+                v
+            } else {
+                (v << 1) - m + self.get_bit()
+            }
+        }
+    }
 
     #[test]
     fn vlc_and_uniform_read_back() {
@@ -119,6 +166,5 @@ mod tests {
         }
         assert_eq!(gb.get_bits(7), 0x5a);
         assert_eq!(gb.get_bit(), 1);
-        assert!(!gb.has_error());
     }
 }
