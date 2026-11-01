@@ -5,12 +5,15 @@ edition = "2024"
 rust-version = "1.85"
 license = "BSD-2-Clause"
 repository = "https://github.com/stukenov/rav2e"
-description = "AV2 video encoder in Rust (pre-alpha: does not encode yet)"
+description = "AV2 video encoder in Rust (pre-alpha)"
 keywords = ["av2", "video", "encoder", "codec"]
 categories = ["multimedia::video", "multimedia::encoding"]
 readme = "README.md"
 
 [dependencies]
+# The decoder's reconstruction, CDF tables and context helpers. The feature is
+# unstable and only on the encoder-internals branch for now.
+rav2d = { git = "https://github.com/stukenov/rav2d", branch = "encoder-internals", features = ["encoder-internals"] }
 
 [profile.dev]
 debug = false

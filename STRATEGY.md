@@ -87,6 +87,11 @@ superblock. Keyframes only, one fixed partition, DC prediction, DCT only,
 fixed quantizer, every in-loop filter off.
 *Exit:* `avmdec` and rav2d decode every frame; their output equals the
 encoder's reconstruction byte for byte.
+*Status (2026-11-01): done.* `tests/closed_loop.rs` encodes six pictures
+from 64x64 to 320x256 at qidx 1–255; rav2d and `avmdec` (AVM `edaf3eb`)
+both decode each to the encoder's reconstruction byte for byte. The range
+coder round-trips 64,000 random symbols against rav2d's `MsacContext`, with
+adaptation on and off.
 
 **M1 — intra.**
 All intra modes chosen by RDO, partition search, transform types and sizes,

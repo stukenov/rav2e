@@ -3,6 +3,11 @@ on:
   push:
     branches: [main]
   pull_request:
+
+env:
+  # The AV2 reference decoder the closed-loop test checks every stream with.
+  AVM_COMMIT: edaf3ebc7ce3666290003f70a66efe5a508982a1
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -11,6 +16,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+
+      - name: Cache avmdec
+        id: avm-cache
+        uses: actions/cache@v4
+        with:
+          path: avm-bin
+          key: avmdec-${{ env.AVM_COMMIT }}
+
+      - name: Build avmdec
+        if: steps.avm-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update && sudo apt-get install -y ninja-build nasm
+          git init avm-src && cd avm-src
+          git fetch --depth 1 https://github.com/AOMediaCodec/avm.git "$AVM_COMMIT"
+          git checkout FETCH_HEAD
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TESTS=0 \
+            -DENABLE_DOCS=0 -DCONFIG_TENSORFLOW_LITE=0
+          ninja -C build avmdec
+          mkdir -p ../avm-bin && cp build/avmdec ../avm-bin/
+
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - name: cargo test
+        run: cargo test
+        env:
+          RAV2E_AVMDEC: ${{ github.workspace }}/avm-bin/avmdec
+          RAV2E_REQUIRE_AVMDEC: "1"
